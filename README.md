@@ -36,6 +36,7 @@ Built and tested end to end on:
 | pi | 0.84.3 |
 
 Disk needed: about 130 GB (11 GB image, 56 GB weights, plus build cache).
+RAM: 64 GB or more. Weights stream through page cache on load.
 
 ## What the model is
 
@@ -235,21 +236,40 @@ a fraction of the whole card.
 ### Measured performance
 
 `vllm bench serve`, random dataset, 2048 input and 256 output tokens, measured
-**while sharing the GPU with the Mistral server** at `GPU_MEM_UTIL=0.50`. A
-dedicated GPU would do better.
+**while sharing the GPU with a separate Mistral server** at `GPU_MEM_UTIL=0.50`.
+A dedicated GPU would do better.
 
 | Concurrency | Output tok/s | Total tok/s | TTFT | TPOT |
 |---|---|---|---|---|
-| 1 | 46.4 | 427 | 250 ms | 20.7 ms |
-| 16 | 412.2 | 3798 | 1883 ms | 31.5 ms |
+| 1 | 46.36 | 427.18 | 250 ms | 20.67 ms |
+| 16 | 412.21 | 3798.48 | 1883 ms | 31.53 ms |
 
-Weights load at 55.57 GiB, leaving 37.47 GiB of KV cache, which holds
-**2,125,299 tokens** thanks to the sliding attention layout.
+**Memory and startup**
+
+| Metric | Value |
+|---|---|
+| Weights loaded | 55.57 GiB |
+| KV cache available | 37.47 GiB |
+| KV cache size | **2,125,299 tokens** |
+| Context length | 131,072 |
+| First start (cold compile) | about 5 to 15 min |
+| Later starts | about 4 min |
+
+The KV figure is the notable one. 37.47 GiB holding 2.1 million tokens is a
+direct result of the sliding attention layout, where only 13 of 52 layers are
+full attention. For comparison, a dense model of similar size needs several
+times that much cache for the same token count.
+
+**Streaming latency**, first SSE chunk: 24 to 41 ms locally and through the
+HTTPS proxy, confirming the proxy is not buffering.
+
+Raw bf16 matmul on this card measured **598.1 TFLOP/s** at 8192 cubed, a useful
+check that the GPU itself is healthy before blaming vLLM.
 
 There is no MTP head in this model, so no self speculative decoding. vLLM 0.28.0
 does register `MuseGlimmerAssistantModel` and `DFlashMuseGlimmerAssistantModel`,
-which are separate draft models. Pairing one of those would mainly help single
-stream latency, and is untested here.
+which are separate draft models. Pairing one would mainly help single stream
+latency, and is untested here.
 
 ```bash
 /opt/muse/bench.sh 2048 256 64 16     # input, output, prompts, concurrency
