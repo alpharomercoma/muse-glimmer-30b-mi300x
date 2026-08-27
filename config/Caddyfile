@@ -13,11 +13,40 @@
 		respond `{"error":{"message":"Invalid API key.","type":"invalid_request_error","code":"invalid_api_key"}}` 401
 	}
 
-	handle {
+	# Named route for Muse-Glimmer. handle_path strips the prefix, so
+	# /muse/v1/models reaches the backend as /v1/models.
+	handle_path /muse/* {
 		reverse_proxy 127.0.0.1:8000 {
 			# Stream SSE tokens through with no buffering.
 			flush_interval -1
 			# Long generations must not be killed by proxy timeouts.
+			transport http {
+				read_timeout 3600s
+				write_timeout 3600s
+				compression off
+			}
+		}
+	}
+
+	# To serve a second model behind the same hostname and key, run it on
+	# another port and uncomment a block like this. Then add a second provider
+	# in the client's models.json pointing at https://HOST/<name>/v1
+	#
+	# handle_path /other/* {
+	# 	reverse_proxy 127.0.0.1:8002 {
+	# 		flush_interval -1
+	# 		transport http {
+	# 			read_timeout 3600s
+	# 			write_timeout 3600s
+	# 			compression off
+	# 		}
+	# 	}
+	# }
+
+	# Default route, so a bare /v1 base URL also works.
+	handle {
+		reverse_proxy 127.0.0.1:8000 {
+			flush_interval -1
 			transport http {
 				read_timeout 3600s
 				write_timeout 3600s

@@ -1,7 +1,7 @@
 {
   "providers": {
     "mi300x": {
-      "baseUrl": "https://REPLACE_WITH_YOUR_DOMAIN/v1",
+      "baseUrl": "https://REPLACE_WITH_YOUR_DOMAIN/muse/v1",
       "api": "openai-completions",
       "apiKey": "$MI300X_API_KEY",
       "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },

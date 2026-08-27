@@ -168,6 +168,15 @@ sudo ACME_EMAIL=you@example.com ./scripts/06-endpoint-secure.sh
 client --HTTPS + Bearer key--> Caddy :443 --http--> vLLM 127.0.0.1:8000
 ```
 
+Routes served:
+
+| Path | Backend |
+|---|---|
+| `/muse/v1/*` | Muse-Glimmer on 127.0.0.1:8000 |
+| `/v1/*` | same, so a bare base URL also works |
+
+Auth is enforced on every path, including any you add.
+
 Generates an API key at `/etc/vllm/api-key`, installs Caddy, obtains a Let's
 Encrypt certificate, enables `ufw` with SSH allowed first, and restarts the
 server bound to loopback.
@@ -175,6 +184,10 @@ server bound to loopback.
 The default certificate hostname is `<public-ip>.nip.io`, a free DNS service
 that resolves the name back to the IP, so no domain purchase is needed. For your
 own domain, point an A record at the machine and pass `VLLM_DOMAIN=...`.
+
+Re-running this script overwrites `/etc/caddy/Caddyfile`. If you have added
+routes for other models by hand, copy them into `config/Caddyfile` first or they
+will be lost. The API key at `/etc/vllm/api-key` is reused, not regenerated.
 
 ### Step 8. Local machine
 
@@ -186,6 +199,7 @@ Prints the endpoint, key, and exact files to create. Summary:
 
 1. `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` (Node 20+)
 2. Copy `client/models.json` to `~/.pi/agent/models.json`, replacing the domain.
+   The base URL is `https://YOUR_DOMAIN/muse/v1`.
 3. Copy `client/settings.json` to `~/.pi/agent/settings.json`.
 4. `export MI300X_API_KEY='sk-mi300x-...'` in your shell profile.
 5. Run `pi`. With settings in place, bare `pi` needs no flags.
@@ -241,20 +255,48 @@ stream latency, and is untested here.
 /opt/muse/bench.sh 2048 256 64 16     # input, output, prompts, concurrency
 ```
 
-## Sharing the GPU with another model
+## Running more than one model
+
+Two things have to be separated: the port and the VRAM.
+
+### Ports
+
+Every server needs its own host port. Two units both publishing `127.0.0.1:8000`
+produce a silent crash loop: the second one exits with Docker status **125**
+(`port is already allocated`) and, with `Restart=on-failure`, retries forever
+without ever touching the GPU. Set `PORT` in each model's env file.
+
+### VRAM
 
 vLLM compares `GPU_MEM_UTIL x TOTAL VRAM` against **free** VRAM at startup, not
-against total. With another server already holding 84 GiB of a 191.7 GiB card,
-any value above about 0.55 fails immediately with:
+against total. So the value is a fraction of the whole card, but it is checked
+against whatever is left. With another server already holding 84 GiB of a
+191.7 GiB card, anything above roughly 0.55 fails immediately:
 
 ```
 ValueError: Free memory on device cuda:0 (107.21/191.69 GiB) on startup is less
 than desired GPU memory utilization (0.92, 176.35 GiB).
 ```
 
-So when co-tenanting, set `GPU_MEM_UTIL` to a fraction of the **whole card** that
-still fits inside what is free. Two servers at 0.50 and 0.44 coexist; 0.92 and
-0.44 do not.
+Budget before you start a second model. Weights alone, on this 191.7 GiB card:
+
+| Model | Weights | At its configured util |
+|---|---|---|
+| Muse-Glimmer-30B | 55.6 GiB | 95.8 GiB at 0.50 |
+| Qwen3.8-27B | 51.7 GiB | 76.7 GiB at 0.40 |
+| Mistral Small 24B | 41 GiB | 84.3 GiB at 0.44 |
+
+Any two of those fit. All three do not.
+
+### Routing
+
+Give each model a path in the Caddyfile using `handle_path`, which strips the
+prefix so `/muse/v1/models` reaches the backend as `/v1/models`. A commented
+template is in `config/Caddyfile`. Clients then get one provider entry per model,
+all sharing the same hostname and API key.
+
+Reload with `systemctl reload caddy`. Caddy refuses an invalid config without
+unloading the running one, so a syntax error does not take the endpoint down.
 
 ## Security
 
@@ -369,6 +411,95 @@ amdgpu: no gpu node! Cannot create KFD process
 `linux-firmware-amd-graphics` is missing. Run `01-gpu-firmware.sh` and reboot.
 Do **not** try `modprobe -r amdgpu` to avoid the reboot; on a failed-init device
 the unload crashes and wedges the module in state `going` until a reboot.
+
+## Notes
+
+The things worth knowing before you touch this stack, in rough order of how much
+time they cost.
+
+### The tool parser is the highest risk setting
+
+Muse-Glimmer uses the ATEM protocol: `<atem:invoke name="...">` inside
+`<atem:function_calls>`, with `<|start|>` / `<|message|>` / `<|eot|>` channel
+tokens and a separate reasoning channel. It is neither Hermes JSON nor Qwen XML.
+
+Getting this wrong does not raise an error. The server returns HTTP 200 with
+fluent, plausible text, and simply never emits `tool_calls`. Every agent silently
+loses its tools, and it looks like a model quality problem rather than a config
+problem. Both parsers must be `muse_glimmer`. `scripts/smoke.sh` tests this
+explicitly, and it is the single most valuable check in the repo.
+
+The general lesson: read the model's `chat_template.jinja` before choosing a
+parser. Grepping it for `<tool_call>`, `<function=`, `<atem:` and `<think>` tells
+you the wire format in seconds, and guessing from the model family is unreliable.
+
+### AMD's images lag, so this repo builds its own
+
+The newest published `rocm/vllm` tag ships vLLM 0.23.0, which does not know
+`MuseGlimmerForConditionalGeneration` at all. `rocm/vllm-dev` publishes only CI
+base images with no vLLM installed. There is no tag to pull.
+
+Building only what is needed produced an **11 GB** image against AMD's 68.9 GB.
+Worth remembering the next time a model needs a newer vLLM than AMD ships.
+
+### pip will quietly hand you a CUDA build
+
+vLLM publishes exactly one ROCm wheel, `cp312` for ROCm 7.2.3. On any other
+Python version, pip falls back to the CUDA wheels from PyPI **without error**,
+and the failure only surfaces later at runtime on AMD hardware.
+
+Two defences are in place. The image is built on a Python 3.12 / ROCm 7.2.3 base
+so the wheel matches exactly, and the Dockerfile ends with an assertion that
+`torch.version.hip` is set, so a fallback fails the build instead of producing a
+broken image.
+
+### Find missing shared libraries all at once
+
+The ROCm dev base image lacks OpenMPI and twelve ROCm math libraries that the
+torch wheel links against. Chasing them one import error at a time is slow.
+Ask the linker for the whole list instead:
+
+```bash
+for f in .../site-packages/torch/lib/*.so*; do ldd "$f" 2>/dev/null | grep "not found"; done \
+  | awk '{print $1}' | sort -u
+```
+
+### A firewall does not close a Docker port
+
+Docker's iptables rules bypass `ufw`, so a deny rule will not close a published
+container port. Binding to `127.0.0.1` is the control that actually closes it.
+Verify with `ss -tlnp | grep 8000`, and do not assume `ufw status` tells you the
+truth about container ports.
+
+### vLLM's own API key is not enough
+
+`--api-key` protects `/v1`, `/v2` and `/inference` only. It leaves
+`/invocations` open, and that endpoint exposes the same inference capability. Any
+deployment relying on vLLM's key alone is serving unauthenticated inference on a
+path most people never check. Auth belongs at the proxy, on every path.
+
+### Caddy's stock unit prints your API key into the journal
+
+It runs `caddy run --environ`, which dumps every environment variable, including
+`VLLM_API_KEY`, on each start. `config/caddy-override.conf` removes that flag.
+Do not re-add it, and if you have run the stock unit with a secret in its
+environment, rotate the key and vacuum the journal.
+
+### A starting service looks dead to the obvious check
+
+`systemctl is-active` exits non-zero for `activating` and `deactivating`, not
+only for `failed`. A wait loop written as `systemctl is-active --quiet X || exit 1`
+aborts on a perfectly healthy service that is still loading weights. Check for
+terminal states explicitly. With `ExecStop=docker stop -t 60`, a restart can also
+sit in `deactivating` for a full minute.
+
+### Everything here is reversible without touching the GPU driver
+
+All version-specific software lives in containers. The host contributes only the
+`amdgpu` kernel driver and its firmware. That means a vLLM upgrade, a rollback,
+or a completely different stack is a container swap, and can be tested on a
+second port beside the running one. The only host-level failure that ever broke
+the GPU was missing firmware, which `00-preflight.sh` now detects.
 
 ## Layout
 

@@ -8,7 +8,7 @@ HOST=$(grep '^VLLM_DOMAIN=' /etc/caddy/vllm.env 2>/dev/null | cut -d= -f2)
 
 cat <<TXT
 ======================================================================
- Endpoint : https://${HOST}/v1
+ Endpoint : https://${HOST}/muse/v1
  API key  : ${KEY}
  Model    : muse-glimmer-30b
 ======================================================================
@@ -20,7 +20,7 @@ cat <<TXT
 {
   "providers": {
     "mi300x": {
-      "baseUrl": "https://${HOST}/v1",
+      "baseUrl": "https://${HOST}/muse/v1",
       "api": "openai-completions",
       "apiKey": "\$MI300X_API_KEY",
       "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
@@ -46,10 +46,10 @@ cat <<TXT
      export MI300X_API_KEY='${KEY}'
 
 5. Verify, then run pi:
-     curl https://${HOST}/v1/models -H "Authorization: Bearer \$MI300X_API_KEY"
+     curl https://${HOST}/muse/v1/models -H "Authorization: Bearer \$MI300X_API_KEY"
      pi
 
 Any OpenAI-compatible client works with the same two values:
-     export OPENAI_BASE_URL=https://${HOST}/v1
+     export OPENAI_BASE_URL=https://${HOST}/muse/v1
      export OPENAI_API_KEY='${KEY}'
 TXT
