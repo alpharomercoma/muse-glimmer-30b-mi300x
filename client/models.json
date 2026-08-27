@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "mi300x": {
+      "baseUrl": "https://REPLACE_WITH_YOUR_DOMAIN/v1",
+      "api": "openai-completions",
+      "apiKey": "$MI300X_API_KEY",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [
+        {
+          "id": "muse-glimmer-30b",
+          "name": "Muse Glimmer 30B (MI300X)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 131072,
+          "maxTokens": 16384,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}

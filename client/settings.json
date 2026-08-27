@@ -1,0 +1,5 @@
+{
+  "defaultProvider": "mi300x",
+  "defaultModel": "muse-glimmer-30b",
+  "defaultThinkingLevel": "medium"
+}

@@ -1,0 +1,38 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$VLLM_DOMAIN} {
+	# Auth gate on EVERY path.
+	# vLLM's own --api-key only covers /v1, /v2 and /inference. It leaves
+	# /invocations unauthenticated, and that endpoint exposes the same
+	# inference capability. So the proxy, not vLLM, is the real gate.
+	@unauthorized not header Authorization "Bearer {$VLLM_API_KEY}"
+	handle @unauthorized {
+		header Content-Type application/json
+		respond `{"error":{"message":"Invalid API key.","type":"invalid_request_error","code":"invalid_api_key"}}` 401
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8000 {
+			# Stream SSE tokens through with no buffering.
+			flush_interval -1
+			# Long generations must not be killed by proxy timeouts.
+			transport http {
+				read_timeout 3600s
+				write_timeout 3600s
+				compression off
+			}
+		}
+	}
+
+	encode zstd gzip
+
+	# Log to stderr, not a file. Caddy's systemd sandbox denies writes to
+	# /var/log/caddy even when the directory is owned by the caddy user,
+	# which makes the service fail to start with "permission denied".
+	log {
+		output stderr
+		format json
+	}
+}

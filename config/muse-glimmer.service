@@ -1,0 +1,17 @@
+[Unit]
+Description=vLLM 0.28.0 serving Muse-Glimmer-30B on MI300X
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f muse-glimmer
+ExecStart=/opt/muse/serve.sh
+ExecStop=/usr/bin/docker stop -t 60 muse-glimmer
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=1800
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
